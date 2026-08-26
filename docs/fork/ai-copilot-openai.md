@@ -20,10 +20,10 @@ generation logic — declares exactly one abstract method, `chatModel(listeners)
 provider supplies a LangChain4j `ChatModel` and nothing else.
 
 With no provider configured, the manager falls back to `ApiAiService`, which posts to
-`api.kestra.io`. On a cluster whose egress allowlist names one host, that call cannot
-complete: the provider registers cleanly at startup, the UI offers a Copilot, and the
-first click fails on the network. The only sanctioned alternative, `gemini`, means a
-second inference vendor, a second key, and a second hole in the allowlist.
+`api.kestra.io`. On a cluster whose egress is an allowlist of named hosts, that call
+cannot complete: the provider registers cleanly at startup, the UI offers a Copilot,
+and the first click fails on the network. The only sanctioned alternative, `gemini`,
+means a second inference vendor, a second key, and another entry in that list.
 
 ## What this patch adds
 
@@ -105,8 +105,8 @@ curl -s -u "$USER:$PASS" https://kestra.xaai.ai/api/v1/main/ai/providers | jq .
 # expect: [{"id":"do-inference","displayName":"...","isDefault":true}]
 ```
 
-No egress change is needed: `inference.do-ai.run` is already the one host the Cilium
-policy allows.
+No egress change is needed: `inference.do-ai.run` is already on the Cilium
+allowlist.
 
 ## Migration and rollback
 
