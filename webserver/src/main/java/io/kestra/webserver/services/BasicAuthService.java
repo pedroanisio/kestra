@@ -233,6 +233,26 @@ public class BasicAuthService {
      * Returns {@code true} if the request carries valid basic-auth credentials
      * (either via the {@value BASIC_AUTH_COOKIE_NAME} cookie or an {@code Authorization: Basic} header).
      *
+     * <p>EVERY credential the request carries is tried, not just the first one found.
+     * This is a deliberate change from upstream, where the expression was
+     * {@code extractFromCookie(request).or(() -> extractFromAuthorizationHeader(request))}
+     * — {@link Optional#or} evaluates its fallback only when the first value is
+     * ABSENT, so a cookie that was merely present shadowed the header entirely and a
+     * stale cookie made valid header credentials unusable.
+     *
+     * <p>That is not a theoretical ordering nit. It breaks the standard deployment of
+     * this application behind an authenticating reverse proxy: the proxy injects
+     * {@code Authorization: Basic}, the browser still holds a {@code BASIC_AUTH}
+     * cookie from an earlier session, and every request 401s while the UI bounces the
+     * user back to its own login form — with correct credentials on the wire.
+     * Reproduced against 1.3.35: header alone answered 200, header plus a stale
+     * cookie answered 401.
+     *
+     * <p>Trying both is strictly more permissive in what it ACCEPTS and no weaker in
+     * what it REJECTS: each candidate is still verified in full against the
+     * configured credentials, so an invalid cookie and an invalid header both still
+     * fail. It only stops one invalid credential from suppressing a valid one.
+     *
      * <p>bcrypt verification is only performed on a cache miss. Subsequent requests
      * with the same token pay only a SHA-256 hash cost, keeping per-request latency
      * negligible while the at-rest hash remains bcrypt-strength.
@@ -242,12 +262,24 @@ public class BasicAuthService {
         if (credentials == null) {
             return false;
         }
-        Optional<String> encoded = extractFromCookie(request).or(() -> extractFromAuthorizationHeader(request));
-        if (encoded.isEmpty()) {
-            return false;
+
+        // Cookie first, so an established session keeps hitting the fast path; the
+        // header is the fallback rather than the alternative.
+        for (Optional<String> candidate : List.of(extractFromCookie(request), extractFromAuthorizationHeader(request))) {
+            if (candidate.isPresent() && isValidToken(candidate.get(), credentials)) {
+                return true;
+            }
         }
+        return false;
+    }
+
+    /**
+     * Verifies one base64 {@code username:password} token against the configured
+     * credentials. Extracted from {@link #isAuthenticated(HttpRequest)} so more than
+     * one candidate can be tried without duplicating the verification or the cache.
+     */
+    private boolean isValidToken(String token, SaltedBasicAuthCredentials credentials) {
         try {
-            String token = encoded.get();
             String tokenSha256 = sha256Hex(token);
 
             // Fast path: same token as last verified — skip bcrypt entirely.

@@ -34,6 +34,7 @@ import io.kestra.webserver.services.BasicAuthService.BasicAuthConfiguration;
 
 import io.micronaut.context.env.Environment;
 import io.micronaut.context.event.ApplicationEventPublisher;
+import java.nio.charset.StandardCharsets;
 import io.micronaut.http.HttpRequest;
 import jakarta.inject.Inject;
 import lombok.AllArgsConstructor;
@@ -267,6 +268,53 @@ class BasicAuthServiceTest {
         assertThat(AuthUtils.matches(credentials.getSalt(), "Kestra123", credentials.getPassword()))
             .as("bcrypt-wrapped hash must still verify against the original password")
             .isTrue();
+    }
+
+    @Test
+    void shouldAuthenticateFromTheHeader_whenAStaleCookieIsAlsoPresent() {
+        // The regression this fork patches. Upstream read
+        //   extractFromCookie(request).or(() -> extractFromAuthorizationHeader(request))
+        // and Optional#or evaluates its fallback only when the first value is ABSENT,
+        // so a cookie that merely EXISTED shadowed the header. Behind an
+        // authenticating reverse proxy that injects Authorization, a browser holding
+        // an old BASIC_AUTH cookie therefore 401s on every request with correct
+        // credentials on the wire, and the UI bounces the user to its own login form.
+        var basicAuthService = new BasicAuthService(new InMemorySettingRepository(), yamlBasicAuthConfiguration, instanceService, ApplicationEventPublisher.noOp());
+        basicAuthService.init();
+        var valid = Base64.getEncoder().encodeToString(
+            (yamlBasicAuthConfiguration.getUsername() + ":" + yamlBasicAuthConfiguration.getPassword()).getBytes(StandardCharsets.UTF_8));
+
+        assertThat(basicAuthService.isAuthenticated(
+            HttpRequest.GET("/api/v1/flows/search").header("Authorization", "Basic " + valid)))
+            .as("a valid header alone must authenticate")
+            .isTrue();
+
+        assertThat(basicAuthService.isAuthenticated(
+            HttpRequest.GET("/api/v1/flows/search")
+                .header("Authorization", "Basic " + valid)
+                .header("Cookie", BasicAuthService.BASIC_AUTH_COOKIE_NAME + "=" + Base64.getEncoder().encodeToString("stale:stale".getBytes(StandardCharsets.UTF_8)))))
+            .as("a stale cookie must not shadow a valid Authorization header")
+            .isTrue();
+    }
+
+    @Test
+    void shouldStillReject_whenNeitherCookieNorHeaderIsValid() {
+        // The other half: trying both candidates must not weaken what is REJECTED.
+        var basicAuthService = new BasicAuthService(new InMemorySettingRepository(), yamlBasicAuthConfiguration, instanceService, ApplicationEventPublisher.noOp());
+        basicAuthService.init();
+        var wrong = Base64.getEncoder().encodeToString(
+            (yamlBasicAuthConfiguration.getUsername() + ":not-the-password").getBytes(StandardCharsets.UTF_8));
+
+        assertThat(basicAuthService.isAuthenticated(
+            HttpRequest.GET("/api/v1/flows/search")
+                .header("Authorization", "Basic " + wrong)
+                .header("Cookie", BasicAuthService.BASIC_AUTH_COOKIE_NAME + "=" + wrong)))
+            .as("two invalid credentials must still be rejected")
+            .isFalse();
+
+        assertThat(basicAuthService.isAuthenticated(HttpRequest.GET("/api/v1/flows/search")))
+            .as("no credential at all must be rejected")
+            .isFalse();
     }
 
     @Test
