@@ -7,6 +7,7 @@ import java.time.Instant;
 import java.util.*;
 import java.util.HexFormat;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 import org.apache.commons.lang3.StringUtils;
@@ -248,10 +249,14 @@ public class BasicAuthService {
      * Reproduced against 1.3.35: header alone answered 200, header plus a stale
      * cookie answered 401.
      *
-     * <p>Trying both is strictly more permissive in what it ACCEPTS and no weaker in
-     * what it REJECTS: each candidate is still verified in full against the
-     * configured credentials, so an invalid cookie and an invalid header both still
-     * fail. It only stops one invalid credential from suppressing a valid one.
+     * <p>Each candidate is still verified in full against the configured credentials,
+     * so an invalid cookie and an invalid header both still fail; this only stops one
+     * invalid credential from suppressing a valid one. The honest cost is that a
+     * single request may now carry two guesses rather than one, doubling the guesses
+     * an online attacker gets per request. Against a bcrypt verification that the
+     * cache deliberately does not short-circuit for wrong passwords, that is a
+     * factor of two on an already impractical attack -- but it is a real change to
+     * the rate, not a no-op, and rate limiting should be sized knowing it.
      *
      * <p>bcrypt verification is only performed on a cache miss. Subsequent requests
      * with the same token pay only a SHA-256 hash cost, keeping per-request latency
@@ -265,8 +270,17 @@ public class BasicAuthService {
 
         // Cookie first, so an established session keeps hitting the fast path; the
         // header is the fallback rather than the alternative.
-        for (Optional<String> candidate : List.of(extractFromCookie(request), extractFromAuthorizationHeader(request))) {
-            if (candidate.isPresent() && isValidToken(candidate.get(), credentials)) {
+        //
+        // Each candidate is resolved LAZILY. Eagerly building the pair would make a
+        // request that the cookie alone authenticates depend on the header parsing
+        // cleanly -- work it never needed, on the hottest path there is.
+        List<Supplier<Optional<String>>> candidates = List.of(
+            () -> extractFromCookie(request),
+            () -> extractFromAuthorizationHeader(request)
+        );
+        for (Supplier<Optional<String>> candidate : candidates) {
+            Optional<String> token = candidate.get();
+            if (token.isPresent() && isValidToken(token.get(), credentials)) {
                 return true;
             }
         }
@@ -336,7 +350,12 @@ public class BasicAuthService {
     private Optional<String> extractFromAuthorizationHeader(HttpRequest<?> request) {
         return request.getHeaders()
             .getAuthorization()
-            .filter(auth -> auth.toLowerCase().startsWith("basic"))
+            // The length guard is load-bearing: substring() below would throw
+            // StringIndexOutOfBoundsException on an Authorization value of exactly
+            // "Basic", and nothing up the stack catches it -- isValidToken only
+            // catches IllegalArgumentException. An unauthenticated caller must not be
+            // able to turn a malformed header into a 500.
+            .filter(auth -> auth.length() > "Basic ".length() && auth.toLowerCase().startsWith("basic"))
             .map(cred -> cred.substring("Basic ".length()));
     }
 

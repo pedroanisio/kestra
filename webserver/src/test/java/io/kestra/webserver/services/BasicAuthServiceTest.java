@@ -318,6 +318,31 @@ class BasicAuthServiceTest {
     }
 
     @Test
+    void shouldNotThrow_whenTheAuthorizationHeaderIsTruncated() {
+        // A header of exactly "Basic" passes the startsWith check and then indexes
+        // past the end of the string. Trying both candidates made this reachable on a
+        // request the cookie alone would have authenticated, so the guard is asserted
+        // from both sides: the cookie still wins, and the malformed header alone is a
+        // plain rejection rather than an exception out of an unauthenticated path.
+        var basicAuthService = new BasicAuthService(new InMemorySettingRepository(), yamlBasicAuthConfiguration, instanceService, ApplicationEventPublisher.noOp());
+        basicAuthService.init();
+        var valid = Base64.getEncoder().encodeToString(
+            (yamlBasicAuthConfiguration.getUsername() + ":" + yamlBasicAuthConfiguration.getPassword()).getBytes(StandardCharsets.UTF_8));
+
+        assertThat(basicAuthService.isAuthenticated(
+            HttpRequest.GET("/api/v1/flows/search")
+                .header("Cookie", BasicAuthService.BASIC_AUTH_COOKIE_NAME + "=" + valid)
+                .header("Authorization", "Basic")))
+            .as("a truncated header must not stop a valid cookie from authenticating")
+            .isTrue();
+
+        assertThat(basicAuthService.isAuthenticated(
+            HttpRequest.GET("/api/v1/flows/search").header("Authorization", "Basic")))
+            .as("a truncated header alone must be rejected, not thrown on")
+            .isFalse();
+    }
+
+    @Test
     void shouldStorePasswordAsBcrypt() {
         // Given
         var tmpSettingsRepo = new InMemorySettingRepository();
