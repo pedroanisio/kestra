@@ -1,0 +1,21 @@
+# Copilot against an OpenAI-COMPATIBLE endpoint (this fork's addition).
+#
+# NOTE ON WHAT THIS ENVIRONMENT ACTUALLY PRODUCES. application-test.yml sets the legacy
+# `kestra.ai.type: gemini` for every test. Emptying `type:` here does NOT clear it -- it
+# was tried, and the instance still built a `gemini-legacy` provider alongside this one.
+# So this environment deliberately keeps the legacy provider and asserts COEXISTENCE:
+# the new type registers next to the legacy path rather than displacing it, and
+# `isDefault` decides which one serves a request that names no provider.
+kestra:
+  ai:
+    providers:
+      - id: openai-compatible
+        display-name: OpenAI-compatible endpoint
+        type: openai
+        isDefault: true
+        configuration:
+          # WireMock, standing in for any OpenAI-compatible server. The port matches
+          # @WireMockTest on AiControllerOpenAiTest.
+          base-url: http://localhost:28186/v1
+          model-name: test-model
+          api-key: fake-key

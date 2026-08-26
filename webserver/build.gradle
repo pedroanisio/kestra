@@ -33,6 +33,9 @@ dependencies {
     // ai
     implementation("dev.langchain4j:langchain4j")
     implementation("dev.langchain4j:langchain4j-google-ai-gemini")
+    // Any OpenAI-compatible endpoint (see io.kestra.webserver.services.ai.openai).
+    // Version comes from the langchain4j BOM already imported by :platform.
+    implementation("dev.langchain4j:langchain4j-open-ai")
     implementation("dev.langchain4j:langchain4j-http-client-jdk")
     implementation('org.bouncycastle:bcpkix-jdk18on')
 

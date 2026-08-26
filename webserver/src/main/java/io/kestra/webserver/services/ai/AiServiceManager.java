@@ -13,6 +13,8 @@ import io.kestra.core.utils.VersionProvider;
 import io.kestra.webserver.services.ai.api.ApiAiService;
 import io.kestra.webserver.services.ai.gemini.GeminiAiService;
 import io.kestra.webserver.services.ai.gemini.GeminiConfiguration;
+import io.kestra.webserver.services.ai.openai.OpenAiAiService;
+import io.kestra.webserver.services.ai.openai.OpenAiConfiguration;
 import io.kestra.webserver.services.posthog.PosthogService;
 
 import io.micronaut.context.annotation.Requires;
@@ -115,16 +117,29 @@ public class AiServiceManager {
             return null;
         }
 
-        if (!"gemini".equals(type)) {
+        // A type this build cannot serve is a configuration error, and it is thrown rather
+        // than logged: the alternative is an instance that starts, shows a Copilot, and
+        // fails on the first click. Note the null check -- `type` is unvalidated user
+        // configuration, and a switch on null throws NullPointerException, which would
+        // report a missing type as an internal error rather than a bad one.
+        if (type == null || (!GeminiAiService.TYPE.equals(type) && !OpenAiAiService.TYPE.equals(type))) {
             throw new IllegalArgumentException(
-                "Unsupported AI provider type '" + type + "' for Kestra OSS. Only 'gemini' is supported. " +
-                "Other providers (openai, anthropic, ollama, etc.) require Kestra Enterprise Edition."
+                "Unsupported AI provider type '" + type + "' for Kestra OSS. Supported types are '" + GeminiAiService.TYPE +
+                "' and '" + OpenAiAiService.TYPE + "' (the latter accepts any OpenAI-compatible endpoint through `base-url`). " +
+                "Other providers (anthropic, ollama, bedrock, etc.) require Kestra Enterprise Edition."
             );
         }
 
         try {
             ObjectMapper mapper = JacksonMapper.ofJson().copy()
                 .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+            if (OpenAiAiService.TYPE.equals(type)) {
+                OpenAiConfiguration openAiConfig = mapper.convertValue(configMap, OpenAiConfiguration.class);
+                return new OpenAiAiService(
+                    pluginRegistry, jsonSchemaGenerator, versionProvider, instanceService, posthogService, namespaceContextTool, provider.displayName(), listeners, openAiConfig
+                );
+            }
 
             GeminiConfiguration geminiConfig = mapper.convertValue(configMap, GeminiConfiguration.class);
             return new GeminiAiService(
